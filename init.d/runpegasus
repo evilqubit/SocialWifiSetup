@@ -1,0 +1,90 @@
+#!/bin/bash
+
+IPTABLES=/sbin/iptables
+CLIENTNET=10.0.0.0/16
+SERVERIP=10.0.0.1
+
+readarray -t FACEBOOK_IPs <<< "$(/root/GetFacebookWhiteList.sh)"
+
+# Flushing All rules
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
+# Enable Internet Connection Sharing
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -o eth0 -j ACCEPT
+
+# Normaly when we share internet connection we specity the input interface with "-i ppp0"
+# Since we have multiple ones, we can ommit it or do the same command for each interface
+# (from ppp0 to ppp253)
+
+echo '1' > /proc/sys/net/ipv4/ip_forward
+
+# To test only the connection share uncomment the following line
+# exit
+
+# Initialize the IP tables ruleset by creating a new chain for captive
+# portal users.
+$IPTABLES -N internet -t mangle
+
+# Exempt traffic which does not originate from the client network.
+$IPTABLES -t mangle -A PREROUTING -p all ! -s $CLIENTNET -j RETURN
+
+# Traffic not exempted by the above rules gets kicked to the captive
+# portal chain.  When a use clicks through a rule is inserted above
+# this one that matches them with a RETURN.
+
+$IPTABLES -t mangle -A PREROUTING -j internet      	# Prerouted Trafficd goes to internet
+$IPTABLES -t mangle -A internet   -j MARK --set-mark 99	# internet mangle table packets, are marked 99
+
+
+# Traffic which has been marked 99 and is headed for 80/TCP or 443/TCP
+# should be redirected to the captive portal web server.
+$IPTABLES -t nat -A PREROUTING -m mark --mark 99 -p tcp --dport 80  -j DNAT --to-destination $SERVERIP:80
+$IPTABLES -t nat -A PREROUTING -m mark --mark 99 -p tcp --dport 443 -j DNAT --to-destination $SERVERIP:443
+
+for FACEBOOK_IP in "${FACEBOOK_IPs[@]}"
+do
+	$IPTABLES -t nat -A PREROUTING -m mark --mark 88 -p tcp --dport 80  -d $FACEBOOK_IP -j RETURN
+	$IPTABLES -t nat -A PREROUTING -m mark --mark 88 -p tcp --dport 443 -d $FACEBOOK_IP -j RETURN
+
+done
+
+$IPTABLES -t nat -A PREROUTING -m mark --mark 88 -p tcp --dport 80  -j DNAT --to-destination $SERVERIP:80
+$IPTABLES -t nat -A PREROUTING -m mark --mark 88 -p tcp --dport 443 -j DNAT --to-destination $SERVERIP:443
+
+# All other traffic which is marked 99 is just dropped
+$IPTABLES -t filter -A FORWARD -m mark --mark 99 -j DROP
+$IPTABLES -t filter -A FORWARD -m mark --mark 88 -j DROP
+
+# Allow incoming traffic that is headed for the local node.
+$IPTABLES -t filter -A INPUT -p tcp --dport 53 -j ACCEPT
+$IPTABLES -t filter -A INPUT -p tcp --dport 80 -j ACCEPT
+$IPTABLES -t filter -A INPUT -p tcp --dport 443 -j ACCEPT
+$IPTABLES -t filter -A INPUT -p icmp -j ACCEPT
+
+# But reject anything else coming from unrecognized users.
+$IPTABLES -t filter -A INPUT -m mark --mark 99 -j DROP
+$IPTABLES -t filter -A INPUT -m mark --mark 88 -j DROP
+
+killall runtrafficaccounting
+
+/etc/init.d/runtrafficaccounting &
+
+
+BLACKLISTED_IPs=`/usr/bin/php /var/www/html/wifi/Crons/blacklistedDomains.php`
+
+for x in $BLACKLISTED_IPs
+do
+	/var/www/html/wifi/Crons/blacklistdomain $x
+done
+
+echo "Finished"

@@ -1,0 +1,61 @@
+#!/usr/bin/php5
+<?php
+
+include '/var/www/html/wifi/Libraries/include.php';
+include '/var/www/html/wifi/Engine/include.php';
+
+$SLEEP_IN_MINUTES = 1;
+
+$IP_array = array();
+
+while (true) {
+
+    $data = explode("\n", trim(shell_exec("iptables -nvx -t mangle -L internet | tail -n +3 | tr -s [:blank:] | cut -d' ' -f3,9")));
+
+    $TempArray = array();
+
+    foreach ($data as $d) {
+
+        $c = explode(' ', $d);
+
+        $IP = $c[1];
+        $Bytes = $c[0];
+
+
+	if ($IP != '0.0.0.0/0') {
+            if (!isset($TempArray[$IP])) {
+                $TempArray[$IP] = $Bytes;
+            } else {
+            	$TempArray[$IP] += $Bytes;
+            }
+	}
+    }
+
+    foreach ($IP_array as $IP => $Bytes) {
+
+        $PreviousBytes = $TempArray[$IP];
+        if ($Bytes == $PreviousBytes || !isset($TempArray[$IP])) {
+
+            DBConnection::SharedConnection()->m_mysql_query("UPDATE `_SocialModules` SET `Disconnected`=1,    `DisconnectionTime`=".time().", `Bytes`=".$Bytes." WHERE `ClientIp`='".$IP."'", false);
+            DBConnection::SharedConnection()->m_mysql_query("UPDATE `_SMSActivation` SET `Disconnected`=1,    `DisconnectionTime`=".time().", `Bytes`=".$Bytes." WHERE `ClientIp`='".$IP."'", false);
+            DBConnection::SharedConnection()->m_mysql_query("UPDATE `_EmailMailingList` SET `Disconnected`=1, `DisconnectionTime`=".time().", `Bytes`=".$Bytes." WHERE `ClientIp`='".$IP."'", false);
+
+            echo "Kicking $IP \n";
+
+            $kickcom = "sudo iptables -t mangle -D internet -s " . $IP . " -j MARK --set-mark 0";
+            $discsession = "conntrack -D -p tcp --src " . $IP;
+            $output = shell_exec($discsession);
+            $output = shell_exec($kickcom);
+
+	    $output = shell_exec($discsession);
+            $output = shell_exec($kickcom);
+
+            unset($IP_array[$IP]);
+        }
+    }
+
+    $IP_array = $TempArray;
+    
+    sleep($SLEEP_IN_MINUTES * 60);
+}
+

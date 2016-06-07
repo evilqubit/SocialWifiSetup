@@ -1,0 +1,5 @@
+#!/bin/bash
+# $1 is the interface pppX ! For ip 10.0.0.2 we should execute: route add -net 10.0.1.0 netmask 255.255.255.0 gw 10.0.0.2 $5 = 10.0.0.2
+IN=$5 arrIN=(${IN//./ }) ROUTER_INDEX=${arrIN[3]} ROUTER_INDEX=$((ROUTER_INDEX-1)) NEW_ROUTE="10.0.$ROUTER_INDEX.0" route add -net $NEW_ROUTE netmask 255.255.255.0 gw $5
+#FARID TEST SCRIPT:
+php -f /var/www/html/test/test.php
